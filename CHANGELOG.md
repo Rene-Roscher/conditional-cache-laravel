@@ -29,6 +29,9 @@ All notable changes to this package are documented here.
 
 ### Fixed
 
+- `flexibleWhen` treated every call as a cache miss on Redis, because the Redis store returns the
+  numeric "created" timestamp as a string. Found by the new integration tests against real Redis,
+  database and file stores, which now run in CI too.
 - Laravel 11.24 is now the minimum version (was 11.23). 11.23 has no `Illuminate\Support\defer()`,
   uses different bookkeeping keys for `Cache::flexible()` and has a protected `Repository::getName()`,
   so `flexibleWhen` and the rejected event didn't work there. Found by testing against the lowest supported versions.

@@ -200,7 +200,8 @@ final class ConditionalCache
             $cache, $retryAfter === null ? [$key, $createdKey] : [$key, $createdKey, $retryKey],
         );
 
-        if (is_null($value) || ! is_int($created)) {
+        // Stores like Redis return numeric values as strings, so accept any numeric timestamp.
+        if (is_null($value) || ! is_numeric($created)) {
             if (is_array($retry) && array_key_exists('value', $retry)) {
                 return $retry['value'];
             }
@@ -217,7 +218,7 @@ final class ConditionalCache
         }
 
         // Still fresh, or a recent refresh was rejected and we are waiting to retry.
-        if (($created + $seconds($fresh)) > Carbon::now()->getTimestamp() || ! is_null($retry)) {
+        if (((int) $created + $seconds($fresh)) > Carbon::now()->getTimestamp() || ! is_null($retry)) {
             return $value;
         }
 

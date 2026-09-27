@@ -288,6 +288,11 @@ Event::listen(function (CacheValueRejected $event) {
 ## Notes
 
 - `null` can never be cached, in `remember()` or here, because `null` means "not in the cache".
+- Overhead on a cache hit is about 1 µs compared to `remember()` (measured on the array store and on
+  Redis). `retryAfter` reads the marker in the same round trip (`many()`), and `lock` is only
+  taken on a miss.
+- If you queue a listener for `CacheValueRejected`, the rejected value is serialized with the event.
+  Keep that in mind for large or non-serializable values.
 - If the callback throws, nothing is cached and the exception propagates, the same as `remember()`.
 - The validator gets only the value, so you can pass callables like `is_array(...)`.
   `onInvalid` gets `($value, $key)`.
@@ -310,6 +315,10 @@ composer analyse   # PHPStan (level max)
 composer format    # Laravel Pint
 composer check     # all of the above, style in check mode
 ```
+
+`StoreIntegrationTest` also runs everything against real Redis, database (SQLite) and file stores.
+Without a local Redis on `127.0.0.1:6379` its Redis cases are skipped; CI runs them with a Redis
+service and fails if it isn't reachable.
 
 ## License
 

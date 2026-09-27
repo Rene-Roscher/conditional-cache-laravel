@@ -36,11 +36,21 @@ jobs:
 
     name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }}
 
+    # A real Redis for StoreIntegrationTest (the database and file stores need no service).
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+
     env:
       # Every Laravel 11 release has published security advisories, which Composer 2.10+
       # refuses to install by default. We still support (and test) Laravel 11 users, so
       # advisory blocking is disabled for those jobs only. This only affects CI.
       COMPOSER_POLICY_ADVISORIES_BLOCK: ${{ matrix.advisories-block }}
+      # Fail instead of skipping the Redis integration tests if the service isn't reachable.
+      REQUIRE_REDIS: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +58,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          extensions: redis, pdo_sqlite
           coverage: none
 
       - name: Install dependencies
