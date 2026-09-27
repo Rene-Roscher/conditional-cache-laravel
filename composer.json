@@ -1,7 +1,15 @@
 {
     "name": "rene-roscher/conditional-cache-laravel",
     "description": "Conditional caching for Laravel: only cache a value when it passes validation (Cache::rememberWhen and friends).",
-    "keywords": ["laravel", "cache", "remember", "rememberWhen", "conditional", "validation", "macro"],
+    "keywords": [
+        "laravel",
+        "cache",
+        "remember",
+        "rememberWhen",
+        "conditional",
+        "validation",
+        "macro"
+    ],
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -13,10 +21,13 @@
     "require": {
         "php": "^8.2",
         "illuminate/cache": "^11.23|^12.0|^13.0",
+        "illuminate/container": "^11.23|^12.0|^13.0",
         "illuminate/support": "^11.23|^12.0|^13.0"
     },
     "require-dev": {
+        "laravel/pint": "^1.18",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^11.0|^12.0"
     },
     "autoload": {
@@ -37,7 +48,14 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "analyse": "phpstan analyse",
+        "format": "pint",
+        "check": [
+            "@format --test",
+            "@analyse",
+            "@test"
+        ]
     },
     "config": {
         "sort-packages": true

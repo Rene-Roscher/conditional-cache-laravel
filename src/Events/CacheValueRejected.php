@@ -17,6 +17,5 @@ class CacheValueRejected
         public readonly string $key,
         public readonly mixed $value,
         public readonly string $method,
-    ) {
-    }
+    ) {}
 }

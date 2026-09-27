@@ -17,15 +17,24 @@ jobs:
         include:
           - laravel: 11.*
             testbench: 9.*
+            advisories-block: '0'
           - laravel: 12.*
             testbench: 10.*
+            advisories-block: '1'
           - laravel: 13.*
             testbench: 11.*
+            advisories-block: '1'
         exclude:
           - laravel: 13.*
             php: 8.2
 
     name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }}
+
+    env:
+      # Every Laravel 11 release has published security advisories, which Composer 2.10+
+      # refuses to install by default. We still support (and test) Laravel 11 users, so
+      # advisory blocking is disabled for those jobs only. This only affects CI.
+      COMPOSER_POLICY_ADVISORIES_BLOCK: ${{ matrix.advisories-block }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +46,30 @@ jobs:
 
       - name: Install dependencies
         run: |
-          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update
-          composer update --${{ matrix.stability }} --prefer-dist --no-interaction
+          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --dev --no-interaction --no-update
+          composer update --${{ matrix.stability }} --prefer-dist --no-interaction --no-progress
 
       - name: Run tests
         run: vendor/bin/phpunit
+
+  quality:
+    runs-on: ubuntu-latest
+
+    name: Code style & static analysis
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.4
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Check code style
+        run: vendor/bin/pint --test
+
+      - name: Run static analysis
+        run: vendor/bin/phpstan analyse --no-progress

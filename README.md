@@ -37,6 +37,12 @@ injected `Illuminate\Contracts\Cache\Repository`.
 
 Requires PHP 8.2+ and Laravel 11.23+, 12 or 13.
 
+| Macro | Like | Stores valid values |
+| --- | --- | --- |
+| `rememberWhen` | `remember` | with a TTL |
+| `rememberForeverWhen` | `rememberForever` | forever |
+| `flexibleWhen` | `flexible` | stale-while-revalidate |
+
 ## Usage
 
 ### `rememberWhen`
@@ -46,8 +52,9 @@ Cache::rememberWhen(
     string|UnitEnum $key,
     Closure|DateTimeInterface|DateInterval|int|null $ttl,
     Closure $callback,
-    ?callable $validator = null,   // fn (mixed $value): bool
-    ?callable $onInvalid = null,   // fn (mixed $value, string $key): mixed
+    callable|string|null $validator = null,   // fn (mixed $value): bool, or an invokable class name
+    ?callable $onInvalid = null,              // fn (mixed $value, string $key): mixed
+    DateTimeInterface|DateInterval|int|null $retryAfter = null,
 ): mixed
 ```
 
@@ -80,6 +87,23 @@ $rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), fn ($r) => fi
 
 // Fail loudly
 $rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), fn ($r) => filled($r), fn () => throw new RatesUnavailable);
+```
+
+#### Reusable validators
+
+Instead of a closure you can pass the class name of an invokable class. It's resolved from the
+container, so it can use dependency injection:
+
+```php
+class SuccessfulApiResponse
+{
+    public function __invoke(mixed $value): bool
+    {
+        return is_array($value) && ($value['success'] ?? false) === true;
+    }
+}
+
+Cache::rememberWhen('api-data', 3600, fn () => Http::get('...')->json(), SuccessfulApiResponse::class);
 ```
 
 #### Default validator
@@ -122,6 +146,28 @@ Cache::rememberWhen(
 );
 ```
 
+#### Don't hammer a broken upstream: `retryAfter`
+
+By default nothing is cached when the value is rejected, so every request runs the callback again.
+If the API is down, that means every request hits it. With `retryAfter` the rejected result (the
+value, or your `onInvalid` fallback) is kept for that long and returned without running the
+callback or `onInvalid` again:
+
+```php
+$data = Cache::rememberWhen(
+    'api-data',
+    3600,
+    fn () => Http::get('api.example.com/data')->json(),
+    fn ($value) => ($value['success'] ?? false) === true,
+    fn () => ['success' => false, 'data' => []],
+    retryAfter: 30,   // retry the API at most every 30 seconds while it's failing
+);
+```
+
+The rejected result is stored under a separate key (`conditional-cache:retry:{key}`). It never
+counts as a cache hit for the valid entry, and the first valid value is cached normally. It has to
+be serializable, like any cached value.
+
 ### `rememberForeverWhen`
 
 The same as `rememberWhen`, but valid values are stored with `forever()`:
@@ -150,9 +196,11 @@ $stats = Cache::flexibleWhen(
   returned.
 - **Stale hit, invalid refresh**: the last valid value stays in the cache. The refresh runs again on
   the next stale hit, until a valid value comes back or the stale TTL runs out.
+- **`retryAfter`**: after a rejected refresh, no new refresh is started until the window has
+  passed. The stale value keeps being served in the meantime.
 - It uses the same keys and lock as `Cache::flexible()`, so the two can share an entry.
 
-Signature: `flexibleWhen($key, array $ttl, callable $callback, ?callable $validator = null, ?callable $onInvalid = null, ?array $lock = null, bool $alwaysDefer = false)`.
+Signature: `flexibleWhen($key, array $ttl, callable $callback, $validator = null, ?callable $onInvalid = null, ?array $lock = null, bool $alwaysDefer = false, $retryAfter = null)`.
 
 > During a deferred refresh the return value of `onInvalid` is ignored, because the request has
 > already been answered with the stale value.
@@ -180,13 +228,18 @@ Event::listen(function (CacheValueRejected $event) {
 - If the callback throws, nothing is cached and the exception propagates, the same as `remember()`.
 - The validator gets only the value, so you can pass callables like `is_array(...)`.
   `onInvalid` gets `($value, $key)`.
+- Invalid arguments (a TTL closure that returns a string, a malformed `[$fresh, $stale]` pair, an
+  unknown validator class) throw an `InvalidArgumentException` right away.
 - IDE autocompletion: [barryvdh/laravel-ide-helper](https://github.com/barryvdh/laravel-ide-helper)
   picks up the macros when it generates `_ide_helper.php`.
 
-## Testing
+## Development
 
 ```bash
-composer test
+composer test      # PHPUnit
+composer analyse   # PHPStan (level max)
+composer format    # Laravel Pint
+composer check     # all of the above, style in check mode
 ```
 
 ## License
