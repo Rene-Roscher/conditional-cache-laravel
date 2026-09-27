@@ -13,6 +13,11 @@ enum CacheKey: string
     case Api = 'api-data';
 }
 
+enum PureCacheKey
+{
+    case Settings;
+}
+
 class RememberWhenTest extends TestCase
 {
     public function test_valid_values_are_cached(): void
@@ -179,6 +184,9 @@ class RememberWhenTest extends TestCase
 
         $this->assertSame('ok', Cache::get('api-data'));
         $this->assertSame('other', $key);
+
+        Cache::rememberWhen(PureCacheKey::Settings, 60, fn () => 'pure', fn () => true);
+        $this->assertSame('pure', Cache::get('Settings'));
     }
 
     public function test_works_with_specific_stores_and_tags(): void

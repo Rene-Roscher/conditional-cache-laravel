@@ -35,7 +35,7 @@ The service provider is auto-discovered. It registers the macros on `Illuminate\
 so they work on the `Cache` facade, on `Cache::store('redis')`, on `Cache::tags([...])` and on any
 injected `Illuminate\Contracts\Cache\Repository`.
 
-Requires PHP 8.2+ and Laravel 11.23+, 12 or 13.
+Requires PHP 8.2+ and Laravel 11.24+, 12 or 13.
 
 | Macro | Like | Stores valid values |
 | --- | --- | --- |

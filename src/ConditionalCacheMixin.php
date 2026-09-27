@@ -30,7 +30,7 @@ class ConditionalCacheMixin
             $key = ConditionalCache::key($key);
 
             return ConditionalCache::remember(
-                $this, 'rememberWhen', $key, $callback, $validator, $onInvalid, $retryAfter,
+                $this, $this->getName(), 'rememberWhen', $key, $callback, $validator, $onInvalid, $retryAfter,
                 fn ($value) => $this->put($key, $value, ConditionalCache::ttl($ttl, $value)),
             );
         };
@@ -49,7 +49,7 @@ class ConditionalCacheMixin
             $key = ConditionalCache::key($key);
 
             return ConditionalCache::remember(
-                $this, 'rememberForeverWhen', $key, $callback, $validator, $onInvalid, $retryAfter,
+                $this, $this->getName(), 'rememberForeverWhen', $key, $callback, $validator, $onInvalid, $retryAfter,
                 fn ($value) => $this->forever($key, $value),
             );
         };
@@ -68,7 +68,7 @@ class ConditionalCacheMixin
             $key = ConditionalCache::key($key);
 
             return ConditionalCache::flexible(
-                $this, $key, $ttl, $callback, $validator, $onInvalid, $lock, $alwaysDefer, $retryAfter,
+                $this, $this->getName(), $key, $ttl, $callback, $validator, $onInvalid, $lock, $alwaysDefer, $retryAfter,
                 fn (string $key): string => $this->itemKey($key),
                 fn (DateTimeInterface|DateInterval|int $ttl): int => $this->getSeconds($ttl),
             );

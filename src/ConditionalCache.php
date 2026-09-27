@@ -2,6 +2,7 @@
 
 namespace ReneRoscher\ConditionalCache;
 
+use BackedEnum;
 use BadMethodCallException;
 use Closure;
 use DateInterval;
@@ -12,9 +13,9 @@ use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use ReneRoscher\ConditionalCache\Events\CacheValueRejected;
+use UnitEnum;
 
 use function Illuminate\Support\defer;
-use function Illuminate\Support\enum_value;
 
 /**
  * @internal The implementation behind the cache macros. Use the macros instead.
@@ -36,7 +37,12 @@ final class ConditionalCache
      */
     public static function key(mixed $key): string
     {
-        $key = enum_value($key);
+        // Same semantics as Laravel's enum_value(), which isn't autoloaded in early Laravel 11 releases.
+        if ($key instanceof BackedEnum) {
+            $key = $key->value;
+        } elseif ($key instanceof UnitEnum) {
+            $key = $key->name;
+        }
 
         if (! is_string($key) && ! is_int($key)) {
             throw new InvalidArgumentException('The cache key must be a string, an integer or a backed enum.');
@@ -52,6 +58,7 @@ final class ConditionalCache
      */
     public static function remember(
         Repository $cache,
+        ?string $storeName,
         string $method,
         string $key,
         Closure $callback,
@@ -77,7 +84,7 @@ final class ConditionalCache
         $value = $callback();
 
         if (! self::passes($value, $validator)) {
-            return self::reject($cache, $method, $key, $value, $onInvalid, $retryAfter);
+            return self::reject($cache, $storeName, $method, $key, $value, $onInvalid, $retryAfter);
         }
 
         $store($value);
@@ -95,6 +102,7 @@ final class ConditionalCache
      */
     public static function flexible(
         Repository $cache,
+        ?string $storeName,
         string $key,
         array $ttl,
         callable $callback,
@@ -124,7 +132,7 @@ final class ConditionalCache
             $value = value($callback);
 
             if (! self::passes($value, $validator)) {
-                return self::reject($cache, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
+                return self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
             }
 
             $cache->putMany([$key => $value, $createdKey => Carbon::now()->getTimestamp()], $stale);
@@ -139,7 +147,7 @@ final class ConditionalCache
 
         $itemKey = $itemKey($key);
 
-        $refresh = function () use ($cache, $key, $itemKey, $createdKey, $stale, $callback, $validator, $onInvalid, $lockSeconds, $lockOwner, $created, $retryAfter) {
+        $refresh = function () use ($cache, $storeName, $key, $itemKey, $createdKey, $stale, $callback, $validator, $onInvalid, $lockSeconds, $lockOwner, $created, $retryAfter) {
             $store = $cache->getStore();
 
             if (! $store instanceof LockProvider) {
@@ -150,7 +158,7 @@ final class ConditionalCache
                 "illuminate:cache:flexible:lock:{$itemKey}",
                 $lockSeconds,
                 $lockOwner,
-            )->get(function () use ($cache, $key, $createdKey, $stale, $callback, $validator, $onInvalid, $created, $retryAfter) {
+            )->get(function () use ($cache, $storeName, $key, $createdKey, $stale, $callback, $validator, $onInvalid, $created, $retryAfter) {
                 if ($created !== $cache->get($createdKey)) {
                     return;
                 }
@@ -158,7 +166,7 @@ final class ConditionalCache
                 $value = value($callback);
 
                 if (! self::passes($value, $validator)) {
-                    self::reject($cache, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
+                    self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
 
                     return;
                 }
@@ -205,13 +213,14 @@ final class ConditionalCache
      */
     public static function reject(
         Repository $cache,
+        ?string $storeName,
         string $method,
         string $key,
         mixed $value,
         ?callable $onInvalid,
         DateTimeInterface|DateInterval|int|null $retryAfter = null,
     ): mixed {
-        $cache->getEventDispatcher()?->dispatch(new CacheValueRejected($cache->getName(), $key, $value, $method));
+        $cache->getEventDispatcher()?->dispatch(new CacheValueRejected($storeName, $key, $value, $method));
 
         $result = $onInvalid === null ? $value : ($onInvalid($value, $key) ?? $value);
 
