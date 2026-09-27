@@ -1,0 +1,92 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  # flexibleWhen mirrors Laravel's Cache::flexible() internals, and the macros must not
+  # collide with new Repository methods. A weekly run against the latest releases
+  # catches framework changes before users do.
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [8.2, 8.3, 8.4]
+        laravel: [11.*, 12.*, 13.*]
+        stability: [prefer-lowest, prefer-stable]
+        include:
+          - laravel: 11.*
+            testbench: ^9.2
+            advisories-block: '0'
+          - laravel: 12.*
+            testbench: 10.*
+            advisories-block: '1'
+          - laravel: 13.*
+            testbench: 11.*
+            advisories-block: '1'
+        exclude:
+          - laravel: 13.*
+            php: 8.2
+
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }}
+
+    # A real Redis for StoreIntegrationTest (the database and file stores need no service).
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      # Every Laravel 11 release has published security advisories, which Composer 2.10+
+      # refuses to install by default. We still support (and test) Laravel 11 users, so
+      # advisory blocking is disabled for those jobs only. This only affects CI.
+      COMPOSER_POLICY_ADVISORIES_BLOCK: ${{ matrix.advisories-block }}
+      # Fail instead of skipping the Redis integration tests if the service isn't reachable.
+      REQUIRE_REDIS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: redis, pdo_sqlite
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --dev --no-interaction --no-update
+          composer update --${{ matrix.stability }} --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests
+        run: vendor/bin/phpunit
+
+  quality:
+    runs-on: ubuntu-latest
+
+    name: Code style & static analysis
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.4
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Check code style
+        run: vendor/bin/pint --test
+
+      - name: Run static analysis
+        run: vendor/bin/phpstan analyse --no-progress

@@ -1,0 +1,14 @@
+parameters:
+    level: max
+    paths:
+        - src
+    ignoreErrors:
+        # Macroable binds the mixin's closures to the cache repository with the
+        # repository's class scope, so `$this` is a Repository and protected
+        # methods (itemKey, getSeconds) are accessible. PHPStan can't see that.
+        -
+            identifier: varTag.nativeType
+            path: src/ConditionalCacheMixin.php
+        -
+            identifier: method.protected
+            path: src/ConditionalCacheMixin.php
