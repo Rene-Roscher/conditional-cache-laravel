@@ -1,48 +1,30 @@
 # Changelog
 
-All notable changes to this package are documented here.
+All notable changes to this package are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses
+[Semantic Versioning](https://semver.org/). While the version is `0.x`, minor versions may
+contain breaking changes.
 
 ## Unreleased
 
+## 0.1.0 - 2026-09-27
+
+Initial release.
+
 ### Added
 
-- `lock` option for `rememberWhen` and `rememberForeverWhen`: only one process computes a missing
-  value, the others wait and read it from the cache (and compute it themselves on timeout).
-- `Cache::forget($key)` also forgets the `retryAfter` marker of that key (including tagged caches).
-- Weekly CI run against the latest Laravel releases, and a test that fails if Laravel adds a
-  native method with the same name as one of the macros.
-- `default` parameter: returned instead of the rejected value, never cached. A closure default is
-  only called when the validation fails and receives `($value, $key)`.
-- `retryAfter` option for all macros: after a rejected value, the callback isn't run again until
-  the window has passed. `flexibleWhen` pauses background refreshes instead.
-- Validators can be the class name of an invokable class, resolved from the container.
-- Invalid arguments (TTL, `[$fresh, $stale]` pair, lock options, key, validator) throw an
-  `InvalidArgumentException` with a clear message.
-- Laravel Pint and PHPStan (level max), with a CI job and `composer check`.
-
-### Changed
-
-- **Breaking:** `retryAfter` requires a `default`, so a rejected value is never stored implicitly.
-  Use `default: fn ($value) => $value` to get the rejected value back.
-- **Breaking:** the return value of `onInvalid` is now ignored. Use `default` for fallback values.
-- The macros are now thin wrappers around `ConditionalCache`, which holds the logic.
-
-### Fixed
-
-- `flexibleWhen` treated every call as a cache miss on Redis, because the Redis store returns the
-  numeric "created" timestamp as a string. Found by the new integration tests against real Redis,
-  database and file stores, which now run in CI too.
-- Laravel 11.24 is now the minimum version (was 11.23). 11.23 has no `Illuminate\Support\defer()`,
-  uses different bookkeeping keys for `Cache::flexible()` and has a protected `Repository::getName()`,
-  so `flexibleWhen` and the rejected event didn't work there. Found by testing against the lowest supported versions.
-- Enum keys no longer depend on Laravel's `enum_value()` helper.
-- CI: the Laravel 11 jobs failed to install because Composer 2.10+ blocks packages with security
-  advisories. Advisory blocking is now disabled for those jobs only.
-- CI: with `--prefer-lowest`, Composer paired the oldest Laravel 11 release with Testbench 9.0.x, whose `setUp()`
-  crashes on that Laravel version. The minimum Testbench version is now 9.2.
-
-## Initial version
-
-- `Cache::rememberWhen()`, `Cache::rememberForeverWhen()` and `Cache::flexibleWhen()`.
-- `onInvalid` callback with fallback return values.
-- `CacheValueRejected` event.
+- `Cache::rememberWhen()`: like `remember()`, but the value is only cached when it passes a
+  validator (a callable, or the class name of an invokable class resolved from the container).
+  Without a validator, only `filled()` values are cached.
+- `Cache::rememberForeverWhen()`: the same, stored with `forever()`.
+- `Cache::flexibleWhen()`: like `flexible()` (stale-while-revalidate), but a background refresh
+  only replaces the cached value when the new one is valid.
+- `default`: a value (or lazy closure) returned instead of a rejected value. Never cached.
+- `onInvalid`: a callback for side effects (logging, reporting, throwing) when a value is rejected.
+- `retryAfter`: after a rejection, the callback isn't run again until the window has passed; the
+  default is returned in the meantime. `Cache::forget($key)` also clears it.
+- `lock`: only one process computes a missing value, the others wait for it.
+- `CacheValueRejected` event for global logging and metrics.
+- Works with every cache store, `Cache::store(...)`, tagged caches and enum keys.
+- Supports PHP 8.2+ and Laravel 11.24+, 12 and 13. Tested against the array, Redis, database and
+  file stores.

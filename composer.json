@@ -10,6 +10,7 @@
         "validation",
         "macro"
     ],
+    "homepage": "https://github.com/Rene-Roscher/conditional-cache-laravel",
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -18,6 +19,10 @@
             "email": "roscher794@gmail.com"
         }
     ],
+    "support": {
+        "issues": "https://github.com/Rene-Roscher/conditional-cache-laravel/issues",
+        "source": "https://github.com/Rene-Roscher/conditional-cache-laravel"
+    },
     "require": {
         "php": "^8.2",
         "illuminate/cache": "^11.24|^12.0|^13.0",
