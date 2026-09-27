@@ -5,7 +5,8 @@ Only cache a value when it is actually worth caching.
 `Cache::remember()` stores whatever the callback returns: an empty array, a `['success' => false]`
 error payload, a half-broken API response. This package adds `Cache::rememberWhen()` and friends:
 the value is only written to the cache when it passes your validator. If it doesn't, the value is
-returned but not cached, and an optional `onInvalid` callback runs.
+not cached: you get it back (or a `default` of your choice), and an optional `onInvalid` callback
+runs.
 
 The idea was proposed for the framework in
 [laravel/framework#55951](https://github.com/laravel/framework/pull/55951), which was closed with the
@@ -53,7 +54,8 @@ Cache::rememberWhen(
     Closure|DateTimeInterface|DateInterval|int|null $ttl,
     Closure $callback,
     callable|string|null $validator = null,   // fn (mixed $value): bool, or an invokable class name
-    ?callable $onInvalid = null,              // fn (mixed $value, string $key): mixed
+    ?callable $onInvalid = null,              // fn (mixed $value, string $key): void
+    mixed $default = null,                    // a value, or fn (mixed $value, string $key): mixed
     DateTimeInterface|DateInterval|int|null $retryAfter = null,
 ): mixed
 ```
@@ -62,31 +64,52 @@ Cache::rememberWhen(
 2. Otherwise the callback runs and its result goes to the validator.
 3. If the validator returns `true`, the value is cached (like `remember()`) and returned.
 4. If it returns `false`, nothing is cached, a `CacheValueRejected` event is dispatched,
-   `onInvalid` runs, and the value is returned. The next call runs the callback again.
+   `onInvalid` runs, and the `default` is returned (or the rejected value, if there is no
+   default). The next call runs the callback again.
 
-#### Reacting to invalid values
+The later parameters are easiest to use as named arguments, so you only pass what you need:
 
 ```php
-$data = Cache::rememberWhen(
-    'api-data',
-    3600,
-    fn () => Http::get('api.example.com/data')->json(),
-    fn ($value) => ($value['success'] ?? false) === true,
-    function ($value, string $key) {
-        Log::warning("Not caching [{$key}], API returned an invalid payload.", ['payload' => $value]);
-    },
+$data = Cache::rememberWhen('api-data', 3600, fn () => $api->fetch(),
+    validator: fn ($v) => ($v['success'] ?? false) === true,
+    default: ['success' => false, 'data' => []],
 );
 ```
 
-If `onInvalid` returns something other than `null`, that value is returned instead of the rejected
-one. It is **not** cached either. You can also throw from `onInvalid`:
+#### A default instead of the invalid value
+
+Pass `default` to get a clean value back instead of the broken one. It is never cached.
 
 ```php
-// Fallback value
-$rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), fn ($r) => filled($r), fn () => config('rates.defaults'));
+// A plain value
+$rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), filled(...), default: []);
 
-// Fail loudly
-$rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), fn ($r) => filled($r), fn () => throw new RatesUnavailable);
+// A closure: only called when the validation fails, gets the rejected value and the key
+$rates = Cache::rememberWhen('rates', 600, fn () => $api->rates(), filled(...),
+    default: fn ($value, $key) => config('rates.defaults'),
+);
+```
+
+- A closure `default` is lazy, so an expensive fallback (a DB query, a config lookup) only runs
+  when it's needed.
+- Because `null` means "no default", use `default: fn () => null` if you really want `null` back.
+- Without a `default`, you get the rejected value back, like `remember()` would return it.
+
+#### Reacting to invalid values: `onInvalid`
+
+`onInvalid` is for side effects (logging, reporting, alerting). Its return value is ignored. It
+runs before the `default` is resolved.
+
+```php
+$data = Cache::rememberWhen('api-data', 3600,
+    fn () => Http::get('api.example.com/data')->json(),
+    fn ($value) => ($value['success'] ?? false) === true,
+    onInvalid: fn ($value, string $key) => Log::warning("Not caching [{$key}]", ['payload' => $value]),
+    default: [],
+);
+
+// Or fail loudly instead of returning anything
+Cache::rememberWhen('rates', 600, fn () => $api->rates(), filled(...), onInvalid: fn () => throw new RatesUnavailable);
 ```
 
 #### Reusable validators
@@ -127,10 +150,11 @@ Cache::rememberWhen(
     callback: fn () => Http::get('...')->json(),
     validator: fn ($value) => $value['success'] ?? false,
     onInvalid: fn ($value) => report(new InvalidApiResponse($value)),
+    default: [],
 );
 
-// Default validator, only an onInvalid hook
-Cache::rememberWhen('api-data', 3600, fn () => $api->fetch(), onInvalid: fn () => Log::info('empty'));
+// Default validator, only a default value
+Cache::rememberWhen('api-data', 3600, fn () => $api->fetch(), default: []);
 ```
 
 #### TTL based on the value
@@ -149,9 +173,9 @@ Cache::rememberWhen(
 #### Don't hammer a broken upstream: `retryAfter`
 
 By default nothing is cached when the value is rejected, so every request runs the callback again.
-If the API is down, that means every request hits it. With `retryAfter` the rejected result (the
-value, or your `onInvalid` fallback) is kept for that long and returned without running the
-callback or `onInvalid` again:
+If the API is down, that means every request hits it. With `retryAfter` the result of the rejection
+(your `default`, or the rejected value) is kept for that long and returned without running the
+callback, `onInvalid` or a closure `default` again:
 
 ```php
 $data = Cache::rememberWhen(
@@ -159,7 +183,7 @@ $data = Cache::rememberWhen(
     3600,
     fn () => Http::get('api.example.com/data')->json(),
     fn ($value) => ($value['success'] ?? false) === true,
-    fn () => ['success' => false, 'data' => []],
+    default: ['success' => false, 'data' => []],
     retryAfter: 30,   // retry the API at most every 30 seconds while it's failing
 );
 ```
@@ -178,9 +202,22 @@ Cache::rememberForeverWhen('settings', fn () => Setting::all()->pluck('value', '
 
 ### `flexibleWhen` (stale-while-revalidate)
 
-`Cache::flexible()` serves stale data while refreshing it in the background. If the background
-refresh returns garbage (because the API is down, for example), the good value gets overwritten.
-`flexibleWhen` only writes values that pass the validator:
+`flexibleWhen` is the validated version of Laravel's
+[`Cache::flexible()`](https://laravel.com/docs/cache#swr), the "stale-while-revalidate" pattern.
+It takes two TTLs, `[$fresh, $stale]`:
+
+| Age of the cached value | `Cache::flexible()` | `Cache::flexibleWhen()` |
+| --- | --- | --- |
+| No value yet | Runs the callback, caches the result | Runs the callback, caches it **only if valid** |
+| Younger than `$fresh` | Returns it | Returns it |
+| Between `$fresh` and `$stale` | Returns it **immediately** and refreshes it **after the response** has been sent | The same, but the refresh only overwrites the value **if the new one is valid** |
+| Older than `$stale` | Expired, like a miss | Expired, like a miss |
+
+So users never wait for a slow API once the value is cached: they get the slightly stale value
+instantly and the refresh happens in the background (via Laravel's `defer()`).
+
+The problem with plain `flexible()`: if the API is broken during a background refresh, the broken
+response replaces your good value. `flexibleWhen` keeps the last valid value instead:
 
 ```php
 $stats = Cache::flexibleWhen(
@@ -188,22 +225,23 @@ $stats = Cache::flexibleWhen(
     [300, 3600],                                   // fresh for 5 min, stale for up to 1 h
     fn () => Http::get('stats.example.com')->json(),
     fn ($value) => ($value['success'] ?? false) === true,
-    fn ($value, $key) => Log::warning("Refresh for [{$key}] rejected"),
+    onInvalid: fn ($value, $key) => Log::warning("Refresh for [{$key}] rejected"),
+    default: ['success' => false, 'data' => []],
 );
 ```
 
-- **Cache miss, invalid value**: nothing is stored, the value (or the `onInvalid` fallback) is
+- **No value yet, invalid response**: nothing is stored, the `default` (or the rejected value) is
   returned.
-- **Stale hit, invalid refresh**: the last valid value stays in the cache. The refresh runs again on
-  the next stale hit, until a valid value comes back or the stale TTL runs out.
+- **Stale value, invalid refresh**: the last valid value stays in the cache and keeps being served.
+  The refresh runs again on the next stale hit, until a valid value comes back or `$stale` runs out.
 - **`retryAfter`**: after a rejected refresh, no new refresh is started until the window has
-  passed. The stale value keeps being served in the meantime.
+  passed.
 - It uses the same keys and lock as `Cache::flexible()`, so the two can share an entry.
 
-Signature: `flexibleWhen($key, array $ttl, callable $callback, $validator = null, ?callable $onInvalid = null, ?array $lock = null, bool $alwaysDefer = false, $retryAfter = null)`.
+Signature: `flexibleWhen($key, array $ttl, callable $callback, $validator = null, ?callable $onInvalid = null, $default = null, ?array $lock = null, bool $alwaysDefer = false, $retryAfter = null)`.
 
-> During a deferred refresh the return value of `onInvalid` is ignored, because the request has
-> already been answered with the stale value.
+> A background refresh doesn't use `default`: the request was already answered with the stale
+> value, and a rejected refresh never writes anything.
 
 ## Listening for rejected values globally
 

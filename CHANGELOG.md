@@ -6,6 +6,8 @@ All notable changes to this package are documented here.
 
 ### Added
 
+- `default` parameter: returned instead of the rejected value, never cached. A closure default is
+  only called when the validation fails and receives `($value, $key)`.
 - `retryAfter` option for all macros: after a rejected value, the callback isn't run again until
   the window has passed. `flexibleWhen` pauses background refreshes instead.
 - Validators can be the class name of an invokable class, resolved from the container.
@@ -15,6 +17,7 @@ All notable changes to this package are documented here.
 
 ### Changed
 
+- **Breaking:** the return value of `onInvalid` is now ignored. Use `default` for fallback values.
 - The macros are now thin wrappers around `ConditionalCache`, which holds the logic.
 
 ### Fixed

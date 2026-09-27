@@ -92,12 +92,64 @@ class RememberWhenTest extends TestCase
         $this->assertSame('ok', Cache::get('api-data'));
     }
 
-    public function test_on_invalid_return_value_is_used_as_fallback_and_not_cached(): void
+    public function test_default_is_returned_instead_of_the_invalid_value_and_not_cached(): void
     {
-        $result = Cache::rememberWhen('api-data', 60, fn () => ['success' => false], fn () => false, fn () => ['fallback']);
+        $result = Cache::rememberWhen('api-data', 60, fn () => ['success' => false], fn () => false, default: ['fallback']);
 
         $this->assertSame(['fallback'], $result);
         $this->assertFalse(Cache::has('api-data'));
+    }
+
+    public function test_default_is_not_used_for_valid_values(): void
+    {
+        $this->assertSame('ok', Cache::rememberWhen('api-data', 60, fn () => 'ok', fn () => true, default: 'fallback'));
+    }
+
+    public function test_closure_default_is_lazy_and_receives_value_and_key(): void
+    {
+        $calls = 0;
+        $default = function ($value, $key) use (&$calls) {
+            $calls++;
+
+            return [$value, $key];
+        };
+
+        Cache::rememberWhen('valid', 60, fn () => 'ok', fn () => true, default: $default);
+        $this->assertSame(0, $calls);
+
+        $this->assertSame(['bad', 'invalid'], Cache::rememberWhen('invalid', 60, fn () => 'bad', fn () => false, default: $default));
+        $this->assertSame(1, $calls);
+    }
+
+    public function test_closure_default_can_return_null(): void
+    {
+        $this->assertNull(Cache::rememberWhen('api-data', 60, fn () => ['success' => false], fn () => false, default: fn () => null));
+    }
+
+    public function test_on_invalid_return_value_is_ignored(): void
+    {
+        $result = Cache::rememberWhen('api-data', 60, fn () => 'bad', fn () => false, onInvalid: fn () => 'ignored');
+
+        $this->assertSame('bad', $result);
+    }
+
+    public function test_on_invalid_runs_before_the_default_is_resolved(): void
+    {
+        $order = [];
+
+        Cache::rememberWhen(
+            'api-data', 60, fn () => 'bad', fn () => false,
+            onInvalid: function () use (&$order) {
+                $order[] = 'onInvalid';
+            },
+            default: function () use (&$order) {
+                $order[] = 'default';
+
+                return 'fallback';
+            },
+        );
+
+        $this->assertSame(['onInvalid', 'default'], $order);
     }
 
     public function test_on_invalid_can_throw(): void
@@ -155,8 +207,8 @@ class RememberWhenTest extends TestCase
         $this->assertTrue($rejected);
         $this->assertFalse(Cache::has('api-data'));
 
-        // Skipping the validator (default: filled) and passing only onInvalid.
-        $this->assertSame('fallback', Cache::rememberWhen('api-data', 60, fn () => [], onInvalid: fn () => 'fallback'));
+        // Skipping the validator (default: filled) and passing only a default.
+        $this->assertSame('fallback', Cache::rememberWhen('api-data', 60, fn () => [], default: 'fallback'));
         $this->assertFalse(Cache::has('api-data'));
     }
 
@@ -222,6 +274,6 @@ class RememberWhenTest extends TestCase
         $this->assertSame('ok', Cache::rememberForeverWhen('forever', fn () => 'ok', fn ($v) => $v === 'ok'));
         $this->assertSame('ok', Cache::rememberForeverWhen('forever', fn () => 'other', fn () => true));
 
-        $this->assertSame('fallback', Cache::rememberForeverWhen('forever-2', fn () => 'bad', fn () => false, fn () => 'fallback'));
+        $this->assertSame('fallback', Cache::rememberForeverWhen('forever-2', fn () => 'bad', fn () => false, default: 'fallback'));
     }
 }

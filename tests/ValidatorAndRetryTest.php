@@ -77,7 +77,7 @@ class ValidatorAndRetryTest extends TestCase
             return $calls < 3 ? ['success' => false] : ['success' => true];
         };
 
-        $fetch = fn () => Cache::rememberWhen('api', 3600, $callback, fn ($v) => $v['success'], fn () => ['fallback'], retryAfter: 30);
+        $fetch = fn () => Cache::rememberWhen('api', 3600, $callback, fn ($v) => $v['success'], default: ['fallback'], retryAfter: 30);
 
         $this->assertSame(['fallback'], $fetch());
         $this->assertSame(['fallback'], $fetch());
@@ -137,6 +137,28 @@ class ValidatorAndRetryTest extends TestCase
         defer()->invoke();
 
         $this->assertSame('v2', Cache::get('flex'));
+    }
+
+    public function test_retry_after_resolves_a_closure_default_only_once_per_window(): void
+    {
+        $defaults = 0;
+        $fetch = function () use (&$defaults) {
+            return Cache::rememberWhen('api', 60, fn () => 'bad', fn () => false, default: function () use (&$defaults) {
+                $defaults++;
+
+                return 'fallback';
+            }, retryAfter: 30);
+        };
+
+        $this->assertSame('fallback', $fetch());
+        $this->assertSame('fallback', $fetch());
+        $this->assertSame(1, $defaults);
+    }
+
+    public function test_flexible_default_on_miss(): void
+    {
+        $this->assertSame('fallback', Cache::flexibleWhen('flex', [10, 60], fn () => 'bad', fn ($v) => $v === 'ok', default: 'fallback'));
+        $this->assertFalse(Cache::has('flex'));
     }
 
     public function test_flexible_retry_after_on_miss(): void

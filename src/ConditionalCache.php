@@ -64,6 +64,7 @@ final class ConditionalCache
         Closure $callback,
         callable|string|null $validator,
         ?callable $onInvalid,
+        mixed $default,
         DateTimeInterface|DateInterval|int|null $retryAfter,
         Closure $store,
     ): mixed {
@@ -84,7 +85,7 @@ final class ConditionalCache
         $value = $callback();
 
         if (! self::passes($value, $validator)) {
-            return self::reject($cache, $storeName, $method, $key, $value, $onInvalid, $retryAfter);
+            return self::reject($cache, $storeName, $method, $key, $value, $onInvalid, $default, $retryAfter);
         }
 
         $store($value);
@@ -108,6 +109,7 @@ final class ConditionalCache
         callable $callback,
         callable|string|null $validator,
         ?callable $onInvalid,
+        mixed $default,
         ?array $lock,
         bool $alwaysDefer,
         DateTimeInterface|DateInterval|int|null $retryAfter,
@@ -132,7 +134,7 @@ final class ConditionalCache
             $value = value($callback);
 
             if (! self::passes($value, $validator)) {
-                return self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
+                return self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $default, $retryAfter);
             }
 
             $cache->putMany([$key => $value, $createdKey => Carbon::now()->getTimestamp()], $stale);
@@ -147,7 +149,7 @@ final class ConditionalCache
 
         $itemKey = $itemKey($key);
 
-        $refresh = function () use ($cache, $storeName, $key, $itemKey, $createdKey, $stale, $callback, $validator, $onInvalid, $lockSeconds, $lockOwner, $created, $retryAfter) {
+        $refresh = function () use ($cache, $storeName, $key, $itemKey, $createdKey, $stale, $callback, $validator, $onInvalid, $default, $lockSeconds, $lockOwner, $created, $retryAfter) {
             $store = $cache->getStore();
 
             if (! $store instanceof LockProvider) {
@@ -158,7 +160,7 @@ final class ConditionalCache
                 "illuminate:cache:flexible:lock:{$itemKey}",
                 $lockSeconds,
                 $lockOwner,
-            )->get(function () use ($cache, $storeName, $key, $createdKey, $stale, $callback, $validator, $onInvalid, $created, $retryAfter) {
+            )->get(function () use ($cache, $storeName, $key, $createdKey, $stale, $callback, $validator, $onInvalid, $default, $created, $retryAfter) {
                 if ($created !== $cache->get($createdKey)) {
                     return;
                 }
@@ -166,7 +168,7 @@ final class ConditionalCache
                 $value = value($callback);
 
                 if (! self::passes($value, $validator)) {
-                    self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $retryAfter);
+                    self::reject($cache, $storeName, 'flexibleWhen', $key, $value, $onInvalid, $default, $retryAfter);
 
                     return;
                 }
@@ -206,10 +208,11 @@ final class ConditionalCache
     /**
      * Handle a value that failed validation and resolve the value to return.
      *
-     * Dispatches the "rejected" event and invokes $onInvalid with the value and the key.
-     * A non-null return value of $onInvalid is returned instead of the rejected value.
-     * With $retryAfter, the result is remembered so the callback isn't run again
-     * until the window has passed.
+     * Dispatches the "rejected" event and invokes $onInvalid with the value and the key
+     * (its return value is ignored). Returns $default instead of the rejected value when
+     * one is given; a Closure default is called with the value and the key, so it can
+     * also return null. With $retryAfter, the result is remembered so the callback
+     * isn't run again until the window has passed.
      */
     public static function reject(
         Repository $cache,
@@ -218,11 +221,16 @@ final class ConditionalCache
         string $key,
         mixed $value,
         ?callable $onInvalid,
+        mixed $default = null,
         DateTimeInterface|DateInterval|int|null $retryAfter = null,
     ): mixed {
         $cache->getEventDispatcher()?->dispatch(new CacheValueRejected($storeName, $key, $value, $method));
 
-        $result = $onInvalid === null ? $value : ($onInvalid($value, $key) ?? $value);
+        if ($onInvalid !== null) {
+            $onInvalid($value, $key);
+        }
+
+        $result = $default instanceof Closure ? $default($value, $key) : ($default ?? $value);
 
         if ($retryAfter !== null) {
             $cache->put(self::RETRY_KEY_PREFIX.$key, ['value' => $result], $retryAfter);
