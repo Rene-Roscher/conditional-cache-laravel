@@ -3,6 +3,12 @@ name: tests
 on:
   push:
   pull_request:
+  # flexibleWhen mirrors Laravel's Cache::flexible() internals, and the macros must not
+  # collide with new Repository methods. A weekly run against the latest releases
+  # catches framework changes before users do.
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
 
 jobs:
   tests:

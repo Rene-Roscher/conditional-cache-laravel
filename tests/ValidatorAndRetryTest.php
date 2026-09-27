@@ -2,6 +2,8 @@
 
 namespace ReneRoscher\ConditionalCache\Tests;
 
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
@@ -98,7 +100,7 @@ class ValidatorAndRetryTest extends TestCase
         Event::assertDispatchedTimes(CacheValueRejected::class, 2);
     }
 
-    public function test_retry_after_remembers_null_results(): void
+    public function test_retry_after_can_remember_a_null_default(): void
     {
         $calls = 0;
 
@@ -107,7 +109,7 @@ class ValidatorAndRetryTest extends TestCase
                 $calls++;
 
                 return null;
-            }, retryAfter: 30);
+            }, default: fn () => null, retryAfter: 30);
         };
 
         $this->assertNull($fetch());
@@ -119,21 +121,21 @@ class ValidatorAndRetryTest extends TestCase
     {
         $validator = fn ($v) => $v !== 'broken';
 
-        Cache::flexibleWhen('flex', [10, 3600], fn () => 'v1', $validator, retryAfter: 60);
+        Cache::flexibleWhen('flex', [10, 3600], fn () => 'v1', $validator, default: 'fallback', retryAfter: 60);
 
         Carbon::setTestNow(now()->addSeconds(11));
 
-        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => 'broken', $validator, retryAfter: 60));
+        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => 'broken', $validator, default: 'fallback', retryAfter: 60));
         defer()->invoke();
 
         // Within the retry window no refresh is scheduled at all.
         Carbon::setTestNow(now()->addSeconds(30));
-        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => $this->fail('should not refresh'), $validator, retryAfter: 60));
+        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => $this->fail('should not refresh'), $validator, default: 'fallback', retryAfter: 60));
         $this->assertCount(0, defer());
 
         // After the window the refresh runs again.
         Carbon::setTestNow(now()->addSeconds(31));
-        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => 'v2', $validator, retryAfter: 60));
+        $this->assertSame('v1', Cache::flexibleWhen('flex', [10, 3600], fn () => 'v2', $validator, default: 'fallback', retryAfter: 60));
         defer()->invoke();
 
         $this->assertSame('v2', Cache::get('flex'));
@@ -170,14 +172,14 @@ class ValidatorAndRetryTest extends TestCase
             return 'broken';
         };
 
-        $this->assertSame('broken', Cache::flexibleWhen('flex', [10, 60], $callback, fn ($v) => $v === 'ok', retryAfter: 30));
-        $this->assertSame('broken', Cache::flexibleWhen('flex', [10, 60], $callback, fn ($v) => $v === 'ok', retryAfter: 30));
+        $this->assertSame('broken', Cache::flexibleWhen('flex', [10, 60], $callback, fn ($v) => $v === 'ok', default: fn ($v) => $v, retryAfter: 30));
+        $this->assertSame('broken', Cache::flexibleWhen('flex', [10, 60], $callback, fn ($v) => $v === 'ok', default: fn ($v) => $v, retryAfter: 30));
         $this->assertSame(1, $calls);
     }
 
     public function test_tagged_caches_keep_retry_markers_inside_the_tag(): void
     {
-        Cache::tags(['api'])->rememberWhen('key', 60, fn () => '', retryAfter: 30);
+        Cache::tags(['api'])->rememberWhen('key', 60, fn () => '', default: 'fallback', retryAfter: 30);
 
         $this->assertTrue(Cache::tags(['api'])->has('conditional-cache:retry:key'));
         $this->assertFalse(Cache::has('conditional-cache:retry:key'));
@@ -185,5 +187,76 @@ class ValidatorAndRetryTest extends TestCase
         Cache::tags(['api'])->flush();
 
         $this->assertFalse(Cache::tags(['api'])->has('conditional-cache:retry:key'));
+    }
+
+    public function test_retry_after_requires_a_default(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('requires a default');
+
+        Cache::rememberWhen('api', 60, fn () => 'bad', fn () => false, retryAfter: 30);
+    }
+
+    public function test_flexible_retry_after_requires_a_default(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        Cache::flexibleWhen('flex', [10, 60], fn () => 'x', retryAfter: 30);
+    }
+
+    public function test_the_rejected_value_can_be_returned_explicitly(): void
+    {
+        $this->assertSame('bad', Cache::rememberWhen('api', 60, fn () => 'bad', fn () => false, default: fn ($v) => $v, retryAfter: 30));
+        $this->assertSame('bad', Cache::rememberWhen('api', 60, fn () => 'other', fn () => false, default: fn ($v) => $v, retryAfter: 30));
+    }
+
+    public function test_forget_also_forgets_the_retry_marker(): void
+    {
+        $calls = 0;
+        $fetch = function () use (&$calls) {
+            return Cache::rememberWhen('api', 60, function () use (&$calls) {
+                $calls++;
+
+                return 'bad';
+            }, fn () => false, default: 'fallback', retryAfter: 300);
+        };
+
+        $fetch();
+        $fetch();
+        $this->assertSame(1, $calls);
+
+        Cache::forget('api');
+
+        $fetch();
+        $this->assertSame(2, $calls);
+    }
+
+    public function test_forget_on_a_tagged_cache_forgets_the_tagged_retry_marker(): void
+    {
+        Cache::tags(['api'])->rememberWhen('key', 60, fn () => '', default: 'fallback', retryAfter: 300);
+        $this->assertTrue(Cache::tags(['api'])->has('conditional-cache:retry:key'));
+
+        Cache::tags(['api'])->forget('key');
+
+        $this->assertFalse(Cache::tags(['api'])->has('conditional-cache:retry:key'));
+    }
+
+    public function test_forget_on_a_specific_store_forgets_its_retry_marker(): void
+    {
+        config(['cache.stores.second' => ['driver' => 'array']]);
+
+        Cache::store('second')->rememberWhen('key', 60, fn () => '', default: 'fallback', retryAfter: 300);
+        Cache::store('second')->forget('key');
+
+        $this->assertFalse(Cache::store('second')->has('conditional-cache:retry:key'));
+    }
+
+    public function test_forget_on_an_unconfigured_store_name_still_works(): void
+    {
+        $repository = new Repository(new ArrayStore, ['store' => 'not-configured']);
+        $repository->setEventDispatcher($this->app['events']);
+        $repository->put('key', 'value', 60);
+
+        $this->assertTrue($repository->forget('key'));
     }
 }

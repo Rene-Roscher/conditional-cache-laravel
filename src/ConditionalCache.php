@@ -10,6 +10,7 @@ use DateTimeInterface;
 use Illuminate\Cache\Repository;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
 use ReneRoscher\ConditionalCache\Events\CacheValueRejected;
@@ -33,6 +34,11 @@ final class ConditionalCache
     public const RETRY_KEY_PREFIX = 'conditional-cache:retry:';
 
     /**
+     * The key prefix of the lock used by the "lock" option.
+     */
+    public const LOCK_KEY_PREFIX = 'conditional-cache:lock:';
+
+    /**
      * Normalize a cache key, resolving backed enums to their value.
      */
     public static function key(mixed $key): string
@@ -54,6 +60,10 @@ final class ConditionalCache
     /**
      * Get an item from the cache, or resolve it and store it via $store if it passes validation.
      *
+     * With $lock (seconds), only one process computes a missing value at a time; the others
+     * wait up to that long for it and compute it themselves if the lock can't be acquired.
+     *
+     * @param  Closure(string): string  $itemKey  Resolves the store-level key (tags aware).
      * @param  Closure(mixed): mixed  $store
      */
     public static function remember(
@@ -66,31 +76,93 @@ final class ConditionalCache
         ?callable $onInvalid,
         mixed $default,
         DateTimeInterface|DateInterval|int|null $retryAfter,
+        ?int $lock,
+        Closure $itemKey,
         Closure $store,
     ): mixed {
-        if ($retryAfter === null) {
-            $value = $cache->get($key);
-        } else {
-            [$value, $retry] = self::many($cache, [$key, self::RETRY_KEY_PREFIX.$key]);
+        self::ensureDefaultForRetry($retryAfter, $default, $method);
 
-            if (is_null($value) && is_array($retry) && array_key_exists('value', $retry)) {
-                return $retry['value'];
-            }
-        }
+        [$found, $value] = self::lookup($cache, $key, $retryAfter);
 
-        if (! is_null($value)) {
+        if ($found) {
             return $value;
         }
 
-        $value = $callback();
+        $resolve = function () use ($cache, $storeName, $method, $key, $callback, $validator, $onInvalid, $default, $retryAfter, $store) {
+            $value = $callback();
 
-        if (! self::passes($value, $validator)) {
-            return self::reject($cache, $storeName, $method, $key, $value, $onInvalid, $default, $retryAfter);
+            if (! self::passes($value, $validator)) {
+                return self::reject($cache, $storeName, $method, $key, $value, $onInvalid, $default, $retryAfter);
+            }
+
+            $store($value);
+
+            return $value;
+        };
+
+        if ($lock === null) {
+            return $resolve();
         }
 
-        $store($value);
+        if ($lock < 1) {
+            throw new InvalidArgumentException("{$method}() expects the lock duration in seconds (at least 1).");
+        }
 
-        return $value;
+        $locks = $cache->getStore();
+
+        if (! $locks instanceof LockProvider) {
+            throw new BadMethodCallException("{$method}() with a lock requires a cache store that supports locks.");
+        }
+
+        try {
+            return $locks->lock(self::LOCK_KEY_PREFIX.$itemKey($key), $lock)->block($lock, function () use ($cache, $key, $retryAfter, $resolve) {
+                // Another process may have resolved the value while we were waiting.
+                [$found, $value] = self::lookup($cache, $key, $retryAfter);
+
+                return $found ? $value : $resolve();
+            });
+        } catch (LockTimeoutException) {
+            return $resolve();
+        }
+    }
+
+    /**
+     * Look up a cached value, or the remembered result of a recent rejection.
+     *
+     * @return array{0: bool, 1: mixed} Whether something was found, and the value.
+     */
+    private static function lookup(Repository $cache, string $key, DateTimeInterface|DateInterval|int|null $retryAfter): array
+    {
+        if ($retryAfter === null) {
+            $value = $cache->get($key);
+
+            return [! is_null($value), $value];
+        }
+
+        [$value, $retry] = self::many($cache, [$key, self::RETRY_KEY_PREFIX.$key]);
+
+        if (! is_null($value)) {
+            return [true, $value];
+        }
+
+        if (is_array($retry) && array_key_exists('value', $retry)) {
+            return [true, $retry['value']];
+        }
+
+        return [false, null];
+    }
+
+    /**
+     * Require a default when retryAfter is used, so a rejected value is never stored.
+     */
+    private static function ensureDefaultForRetry(mixed $retryAfter, mixed $default, string $method): void
+    {
+        if ($retryAfter !== null && $default === null) {
+            throw new InvalidArgumentException(
+                "{$method}() with retryAfter requires a default, which is returned while waiting to retry. "
+                .'Use default: fn ($value) => $value to get the rejected value back.'
+            );
+        }
     }
 
     /**
@@ -116,6 +188,8 @@ final class ConditionalCache
         Closure $itemKey,
         Closure $seconds,
     ): mixed {
+        self::ensureDefaultForRetry($retryAfter, $default, 'flexibleWhen');
+
         [$fresh, $stale] = self::flexibleTtl($ttl);
         [$lockSeconds, $lockOwner] = self::lockOptions($lock);
 

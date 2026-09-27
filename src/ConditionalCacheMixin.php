@@ -21,16 +21,17 @@ class ConditionalCacheMixin
      * Get an item from the cache, or execute the callback and store the result
      * only if it passes the validator.
      *
-     * Signature: rememberWhen($key, $ttl, $callback, $validator = null, $onInvalid = null, $default = null, $retryAfter = null)
+     * Signature: rememberWhen($key, $ttl, $callback, $validator = null, $onInvalid = null, $default = null, $retryAfter = null, $lock = null)
      */
     public function rememberWhen(): Closure
     {
-        return function (mixed $key, Closure|DateTimeInterface|DateInterval|int|null $ttl, Closure $callback, callable|string|null $validator = null, ?callable $onInvalid = null, mixed $default = null, DateTimeInterface|DateInterval|int|null $retryAfter = null) {
+        return function (mixed $key, Closure|DateTimeInterface|DateInterval|int|null $ttl, Closure $callback, callable|string|null $validator = null, ?callable $onInvalid = null, mixed $default = null, DateTimeInterface|DateInterval|int|null $retryAfter = null, ?int $lock = null) {
             /** @var Repository $this */
             $key = ConditionalCache::key($key);
 
             return ConditionalCache::remember(
-                $this, $this->getName(), 'rememberWhen', $key, $callback, $validator, $onInvalid, $default, $retryAfter,
+                $this, $this->getName(), 'rememberWhen', $key, $callback, $validator, $onInvalid, $default, $retryAfter, $lock,
+                fn (string $key): string => $this->itemKey($key),
                 fn ($value) => $this->put($key, $value, ConditionalCache::ttl($ttl, $value)),
             );
         };
@@ -40,16 +41,17 @@ class ConditionalCacheMixin
      * Get an item from the cache, or execute the callback and store the result
      * forever, but only if it passes the validator.
      *
-     * Signature: rememberForeverWhen($key, $callback, $validator = null, $onInvalid = null, $default = null, $retryAfter = null)
+     * Signature: rememberForeverWhen($key, $callback, $validator = null, $onInvalid = null, $default = null, $retryAfter = null, $lock = null)
      */
     public function rememberForeverWhen(): Closure
     {
-        return function (mixed $key, Closure $callback, callable|string|null $validator = null, ?callable $onInvalid = null, mixed $default = null, DateTimeInterface|DateInterval|int|null $retryAfter = null) {
+        return function (mixed $key, Closure $callback, callable|string|null $validator = null, ?callable $onInvalid = null, mixed $default = null, DateTimeInterface|DateInterval|int|null $retryAfter = null, ?int $lock = null) {
             /** @var Repository $this */
             $key = ConditionalCache::key($key);
 
             return ConditionalCache::remember(
-                $this, $this->getName(), 'rememberForeverWhen', $key, $callback, $validator, $onInvalid, $default, $retryAfter,
+                $this, $this->getName(), 'rememberForeverWhen', $key, $callback, $validator, $onInvalid, $default, $retryAfter, $lock,
+                fn (string $key): string => $this->itemKey($key),
                 fn ($value) => $this->forever($key, $value),
             );
         };

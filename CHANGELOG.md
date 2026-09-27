@@ -6,6 +6,11 @@ All notable changes to this package are documented here.
 
 ### Added
 
+- `lock` option for `rememberWhen` and `rememberForeverWhen`: only one process computes a missing
+  value, the others wait and read it from the cache (and compute it themselves on timeout).
+- `Cache::forget($key)` also forgets the `retryAfter` marker of that key (including tagged caches).
+- Weekly CI run against the latest Laravel releases, and a test that fails if Laravel adds a
+  native method with the same name as one of the macros.
 - `default` parameter: returned instead of the rejected value, never cached. A closure default is
   only called when the validation fails and receives `($value, $key)`.
 - `retryAfter` option for all macros: after a rejected value, the callback isn't run again until
@@ -17,6 +22,8 @@ All notable changes to this package are documented here.
 
 ### Changed
 
+- **Breaking:** `retryAfter` requires a `default`, so a rejected value is never stored implicitly.
+  Use `default: fn ($value) => $value` to get the rejected value back.
 - **Breaking:** the return value of `onInvalid` is now ignored. Use `default` for fallback values.
 - The macros are now thin wrappers around `ConditionalCache`, which holds the logic.
 

@@ -56,7 +56,8 @@ Cache::rememberWhen(
     callable|string|null $validator = null,   // fn (mixed $value): bool, or an invokable class name
     ?callable $onInvalid = null,              // fn (mixed $value, string $key): void
     mixed $default = null,                    // a value, or fn (mixed $value, string $key): mixed
-    DateTimeInterface|DateInterval|int|null $retryAfter = null,
+    DateTimeInterface|DateInterval|int|null $retryAfter = null,   // requires a default
+    ?int $lock = null,                        // seconds
 ): mixed
 ```
 
@@ -173,9 +174,9 @@ Cache::rememberWhen(
 #### Don't hammer a broken upstream: `retryAfter`
 
 By default nothing is cached when the value is rejected, so every request runs the callback again.
-If the API is down, that means every request hits it. With `retryAfter` the result of the rejection
-(your `default`, or the rejected value) is kept for that long and returned without running the
-callback, `onInvalid` or a closure `default` again:
+If the API is down, that means every request hits it. With `retryAfter` the resolved `default` is
+kept for that long and returned without running the callback, `onInvalid` or a closure `default`
+again:
 
 ```php
 $data = Cache::rememberWhen(
@@ -188,9 +189,31 @@ $data = Cache::rememberWhen(
 );
 ```
 
-The rejected result is stored under a separate key (`conditional-cache:retry:{key}`). It never
-counts as a cache hit for the valid entry, and the first valid value is cached normally. It has to
-be serializable, like any cached value.
+- `retryAfter` **requires a `default`**, because that's what's returned while waiting. This way a
+  rejected value is never stored by accident. If you really want the rejected value back, say so:
+  `default: fn ($value) => $value`.
+- The default is stored under a separate key (`conditional-cache:retry:{key}`). It never counts as
+  a cache hit for the valid entry, and the first valid value is cached normally.
+- `Cache::forget('api-data')` also forgets that marker, so you can always force a retry. This works
+  on every store and on tagged caches. (It's done by a listener on Laravel's `ForgettingKey` event,
+  so each `forget()` in your app sends one extra, cheap delete for the marker key.)
+
+#### Only compute once under load: `lock`
+
+Like `remember()`, many requests that miss at the same time all run the callback in parallel. For
+an expensive or rate-limited upstream, pass `lock` (in seconds): only one process computes the value,
+the others wait for it and then read it from the cache.
+
+```php
+$data = Cache::rememberWhen('api-data', 3600, fn () => $api->fetch(), $validator,
+    default: [],
+    lock: 10,   // one fetch at a time, others wait up to 10 s
+);
+```
+
+If the lock can't be acquired within that time, the waiting process computes the value itself, so a
+stuck lock never breaks a request. It needs a store with lock support (Redis, database, file,
+array, ...).
 
 ### `rememberForeverWhen`
 
@@ -239,6 +262,8 @@ $stats = Cache::flexibleWhen(
 - It uses the same keys and lock as `Cache::flexible()`, so the two can share an entry.
 
 Signature: `flexibleWhen($key, array $ttl, callable $callback, $validator = null, ?callable $onInvalid = null, $default = null, ?array $lock = null, bool $alwaysDefer = false, $retryAfter = null)`.
+Here `lock` is the same option as in `Cache::flexible()` (`['seconds' => 10, 'owner' => ...]`) and
+guards the background refresh.
 
 > A background refresh doesn't use `default`: the request was already answered with the stale
 > value, and a rejected refresh never writes anything.
@@ -269,7 +294,13 @@ Event::listen(function (CacheValueRejected $event) {
 - Invalid arguments (a TTL closure that returns a string, a malformed `[$fresh, $stale]` pair, an
   unknown validator class) throw an `InvalidArgumentException` right away.
 - IDE autocompletion: [barryvdh/laravel-ide-helper](https://github.com/barryvdh/laravel-ide-helper)
-  picks up the macros when it generates `_ide_helper.php`.
+  picks up the macros when it generates `_ide_helper.php`. [Larastan](https://github.com/larastan/larastan)
+  reads the macros of the `Cache` facade on its own and takes the parameter types from them.
+- The macros are registered on `Illuminate\Cache\Repository`. Should Laravel ever add a native
+  method with the same name, the native method wins. The test suite checks for that and runs weekly
+  against the latest Laravel releases.
+- `flexibleWhen` mirrors the bookkeeping of `Cache::flexible()` (keys, lock and `defer()`), which is
+  why Laravel 11.24 is the minimum. The weekly CI run also catches changes there.
 
 ## Development
 
