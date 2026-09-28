@@ -1,5 +1,7 @@
 # Conditional Cache for Laravel
 
+![Before: Cache::remember() always caches. After: Cache::rememberWhen() only caches valid responses.](https://raw.githubusercontent.com/Rene-Roscher/conditional-cache-laravel/main/art/banner.webp)
+
 Only cache a value when it is actually worth caching.
 
 `Cache::remember()` stores whatever the callback returns: an empty array, a `['success' => false]`
@@ -11,20 +13,6 @@ runs.
 The idea was proposed for the framework in
 [laravel/framework#55951](https://github.com/laravel/framework/pull/55951), which was closed with the
 suggestion to ship it as a package. This is that package.
-
-```php
-// Before: always cached, even if empty or an error response
-$data = Cache::remember('api-data', 3600, function () {
-    return Http::get('api.example.com/data')->json();
-});
-
-// After: only cached when the response is valid
-$data = Cache::rememberWhen('api-data', 3600, function () {
-    return Http::get('api.example.com/data')->json();
-}, function ($value) {
-    return ! empty($value) && isset($value['success']) && $value['success'] === true;
-});
-```
 
 ## Installation
 
